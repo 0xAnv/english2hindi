@@ -122,7 +122,7 @@ class IITBDataLoader(BaseDataLoader):
             data_frames[split] = df
         return data_frames
     
-def testing_iitb_data_loader():
+def testing_iitb_data_loader() -> None:
     """ Function to test IITB data loader"""
     # Example usage
     iitb_config:IITBDataConfig = IITBDataConfig()
@@ -131,5 +131,16 @@ def testing_iitb_data_loader():
     for split, df in data.items():
         print(f"{split} data shape: {df.shape}")
 
+    """
+    Output of testing iitb loader :
+    
+    train data shape: (1659083, 2)
+    test data shape: (2507, 2)
+    validation data shape: (520, 2)
+    """
+
+    return None
+
 if __name__ == "__main__":
     testing_iitb_data_loader()
+    
