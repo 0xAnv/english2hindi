@@ -5,9 +5,14 @@
 # module imports 
 import os
 import json
-
 from abc import abstractmethod, ABC 
 from pathlib import Path
+
+# bpe specific imports 
+from tokenizers import Tokenizer as RustTokenizer
+from tokenizers import models, pre_tokenizers, trainers
+import tokenizers
+
 
 # tokeniser base class
 class Tokenizer(ABC): 
@@ -83,5 +88,79 @@ class Tokenizer(ABC):
             return
         # creating reverse mapping
         self.id_to_token = {v:k for k, v in self.vocab.items()}
+
+    
+#####################################################################
+# Implementation of Byte Pair Encoding (BPE) Tokeniser
+#####################################################################
+"""
+"""
+
+class BPETokenizer(Tokenizer): 
+    def __init__(self) -> None:
+        super().__init__()
+        self._tokenizer : RustTokenizer = RustTokenizer(models.BPE(unk_token="[UNK]"))
+        self._tokenizer.pre_tokenizer  = pre_tokenizers.Whitespace() # you cannot type annotate an attribute assignment ( in this _tokenizer.case pre_tokenizer)
+
+    def train(self, text_data:list[str], vocab_size:int) -> None :
+        """Trains the BPE tokeniser on a list of strings (sentences) """
+        trainer : trainers.BpeTrainer = trainers.BpeTrainer(
+            vocab_size=vocab_size, 
+            special_tokens=["[UNK]", "[PAD]", "[SOS]", "[EOS]"]
+        )
+        
+        # running the training 
+        # We pass the data (iterator) and the trainer to the engine.
+        # It runs very fast (Rust speed).
+        self._tokenizer.train_from_iterator(text_data, trainer=trainer)
+        # Now that Rust is done, we copy the learned vocab back to Python
+        # so your Base Class properties work correctly.
+        self.vocab = self._tokenizer.get_vocab()
+        if self.vocab is None:
+            print("Training failed, vocab is NoneType object")
+            return
+        
+        # acknowledge training completion
+        print("training completed. Vocab size:", len(self.vocab))
+
+    # Encoding and decoding functions for bpe goes here 
+    def encode(self, text:str) -> list[int] : 
+        """ Input: single string "hello i am anvesh"
+            Output: List of integers [23, 44, 90, 54]
+        """
+        encoded  = self._tokenizer.encode(text)
+        return encoded.ids
+    
+    def decode(self, ids: list[int], skip_special_tokens: bool = True) -> str:
+        return self._tokenizer.decode(ids, skip_special_tokens=skip_special_tokens)
+    
+    # Loading and saving a trained tokenizer goes here 
+    def save(self, directory : str | Path, prefix : str) -> None:
+        """ Saves the BPE tokeniser using Rust Tokenizer's save method"""
+        dir_path : Path = Path(directory) 
+        dir_path.mkdir(parents=True , exist_ok=True)
+        
+        # save full model merges + vocab 
+        model_path: Path = dir_path / f"{prefix}_tokenizer.json"
+        print(f"Saving model to path: {model_path}")
+        return None 
+    
+    def load(self, directory: str | Path, prefix:str) -> None:
+        """Loads the BPE tokeniser using Rust Tokenizer's load method"""
+        dir_path: Path = Path(directory) 
+        model_path: Path = dir_path / f"{prefix}_tokenizer.json"
+        if not model_path.exists(): 
+            raise FileNotFoundError(f"Tokeniser file {model_path} DOESN'T EXIST ")
+        print(f"Loading model from path: {model_path}")
+
+        # load rust backend 
+        self._tokenizer : RustTokenizer = RustTokenizer.from_file(str(model_path))
+        
+        # updating base class state so vocab_size works 
+        self.vocab = self._tokenizer.get_vocab()
+
+        print("Loaded vocab size:", len(self.vocab) if self.vocab else 0)
+        return None
+    
 
     
