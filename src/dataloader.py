@@ -118,7 +118,7 @@ class IITBDataLoader(BaseDataLoader):
         data_frames:dict[str, pd.DataFrame] = {}
         for split in splits:
             file_path:Path = self.config.base_dir / 'raw' / f"{split}.{self.config.format}"
-            df:pd.DataFrame = self._load_parquet_file(file_path)
+            df:pd.DataFrame = self._load_parquet_file(Path(file_path))
             data_frames[split] = df
         return data_frames
     
