@@ -83,7 +83,8 @@ class IITBDataLoader(BaseDataLoader):
     """Data Loader for IITB dataset"""
     def __init__(self, config:IITBDataConfig) -> None:
         super().__init__(config)
-        if not config.base_dir.exists():
+        train_file_path:Path = config.base_dir / "raw/train.parquet"
+        if not train_file_path.exists():
             print(f"Data directory {config.base_dir} does not exist. Downloading data...")
             self._download_iitb_data(config.dataset_name) # automatically downloads data 
 

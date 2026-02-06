@@ -1,166 +1,265 @@
-#####################################################
-# Logic for tokenisation of input strings into tokens.
-#####################################################
+# abstract base class imports 
+from abc import ABC, abstractmethod
 
-# module imports 
-import os
-import json
-from abc import abstractmethod, ABC 
+# HF tokeniser specifics
+from numpy import iterable
+from tokenizers import Tokenizer 
+from tokenizers import models
+from tokenizers import pre_tokenizers
+from tokenizers import trainers
+from tokenizers import decoders
+
+# other imports
 from pathlib import Path
+from dataclasses import dataclass
+from collections.abc import Iterable
 
-# bpe specific imports 
-from tokenizers import Tokenizer as RustTokenizer
-from tokenizers import models, pre_tokenizers, trainers
-import tokenizers
-
-
-# tokeniser base class
-class Tokenizer(ABC): 
-    """Generic class for any tokeniser. They will inherit this class"""
+from src.dataloader import BaseDataLoader, IITBDataLoader, IITBDataConfig
+###########################################################
+# Base class for tokeniser
+###########################################################
+ 
+class Tokeniser(ABC):
     def __init__(self) -> None:
         super().__init__()
-        # every tokeniser will need a vocabulary size 
-        # we initialise it as empty 
-        # { 'apple' : 3, 'potato' : 2 }
-        self.vocab : dict[str,int] | None = None # map from Token -> ID 
-        self.id_to_token : dict[int, str] | None = None # map from ID -> Token
+        self.vocab : dict | None = None # this is our none
+    
+    # training the tokeniser
+    @abstractmethod
+    def train(self) -> None: pass 
+
+    # encoding and decoding logic go here 
+    @abstractmethod
+    def encode(
+        self, 
+        data: list[str] | Iterable[list[str]]
+    ) -> list[list[int]] | Iterable[list[list[int]]]: pass
 
     @abstractmethod
-    def train(self, text_data:list[str], vocab_size:int) -> None : 
-        """
-        Trains the tokeniser on a list of strings (sentences) 
-        This function will return nothing, but it will update internal state.
-        """
-        pass 
+    def decode(
+        self, 
+        tokens: list[list[int]] | Iterable[list[list[int]]]
+    ) -> list[str] | Iterable[list[str]] : pass
 
+    # IO related functions go here 
     @abstractmethod
-    def encode(self, text:str) -> list[int] : 
-        """
-        Input: single string "hello i am anvesh"
-        Output: List of integers [23, 44, 90, 54]
-        """
-        pass 
-
+    def save(self) -> None : pass 
     @abstractmethod
-    def decode(self, ids:list[int]) -> str:
-        """
-        Input: List of tokens
-        Output: A reconstructed string
-        """
-        pass
+    def load(self) -> None : pass
 
-    # when we load the pipeline, we will have to expose the vocab size property from internal state 
-    # this will be used in later part of training pipeline like the nn.EmbeddingLayer()
-    @property
-    def vocab_size(self) -> int : 
-        if self.vocab is None: return 0
-        return len(self.vocab)
+@dataclass
+class BPEConfig:
+    vocab_size:int #vocabulary size total
+    unk_token: str
+    end_of_word_suffix: str 
+    special_tokens: list[str]
+    text_data: list[str] | Iterable[list[str]] # this is the text data that we will use to train the tokeniser
     
-    # Generic Functions to save and load the tokeniser
-    def save(self, directory : str | Path, prefix : str) -> None:
-        """ Saves the vocab into a single json file"""
-        if self.vocab is None:
-            print("Don't be rookie. First train your tokeniser")
-            return
-        
-        dir_path : Path = Path(directory)
-        dir_path.mkdir(parents=True , exist_ok=True)
+    # tokeniser saving configs
+    save_name:str 
+    save_path:Path
 
-        vocab_path:Path = dir_path / f"{prefix}_vocab.json"
-        with open(vocab_path, "w", encoding="utf-8") as f:
-            json.dump(self.vocab, f, ensure_ascii=False, indent=2)
-        
-        return None
-    
-    def load(self, directory: str | Path, prefix:str) -> None:
-        """Loads the vocab from json file using pathlib"""
-        dir_path: Path = Path(directory) 
-        vocab_file_path: Path = dir_path / f"{prefix}_vocab.json"
 
-        if not vocab_file_path.exists(): raise FileNotFoundError(f"Tokeniser file {vocab_file_path} DOESN'T EXIST ")
-        with open(vocab_file_path, "r", encoding="utf-8") as f: 
-            print("Loaded Vocab in self.vocab")
-            self.vocab = json.load(f)
-        
-        # automatically generate the reverse mapping for all child classes
-        if self.vocab is None: 
-            print("Cannot create reverse mapping, VOCAB is NoneType Object")
-            return
-        # creating reverse mapping
-        self.id_to_token = {v:k for k, v in self.vocab.items()}
-
-    
-#####################################################################
-# Implementation of Byte Pair Encoding (BPE) Tokeniser
-#####################################################################
-"""
-"""
-
-class BPETokenizer(Tokenizer): 
-    def __init__(self) -> None:
+class BPETokeniser(Tokeniser):
+    def __init__(self, config: BPEConfig) -> None:
         super().__init__()
-        self._tokenizer : RustTokenizer = RustTokenizer(models.BPE(unk_token="[UNK]"))
-        self._tokenizer.pre_tokenizer  = pre_tokenizers.Whitespace() # you cannot type annotate an attribute assignment ( in this _tokenizer.case pre_tokenizer)
+        self.config = config
+        # creating hf tokeniser object
+        self._tokenizer: Tokenizer = Tokenizer(models.BPE(
+            unk_token= self.config.unk_token, 
+            end_of_word_suffix= self.config.end_of_word_suffix
+        ))
+        # this is a whitespace pre tokenizer
+        self._tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+        # automatically train the tokeniser on initialisation 
+        self.tokeniser_save_path:Path = Path(self.config.save_path)
 
-    def train(self, text_data:list[str], vocab_size:int) -> None :
-        """Trains the BPE tokeniser on a list of strings (sentences) """
-        trainer : trainers.BpeTrainer = trainers.BpeTrainer(
-            vocab_size=vocab_size, 
-            special_tokens=["[UNK]", "[PAD]", "[SOS]", "[EOS]"]
+        if not self.tokeniser_save_path.exists(): 
+            print("No folder found to save tokeniser... making one")
+            self.tokeniser_save_path.mkdir(exist_ok=True)
+
+        if Path(self.tokeniser_save_path, self.config.save_name).exists() : 
+            self.load() # read from config
+        
+        else: self.train()
+
+    def train(self) -> None : 
+        trainer: trainers.BpeTrainer = trainers.BpeTrainer(
+            vocab_size = self.config.vocab_size , 
+            end_of_word_suffix = self.config.end_of_word_suffix, 
+            special_tokens = self.config.special_tokens
         )
-        
-        # running the training 
-        # We pass the data (iterator) and the trainer to the engine.
-        # It runs very fast (Rust speed).
-        self._tokenizer.train_from_iterator(text_data, trainer=trainer)
-        # Now that Rust is done, we copy the learned vocab back to Python
-        # so your Base Class properties work correctly.
+        print("Tokeniser training started...")
+        self._tokenizer.train_from_iterator(
+            iterator = self.config.text_data, 
+            trainer = trainer
+        )
+
+        print("Tokeniser training completed") 
         self.vocab = self._tokenizer.get_vocab()
         if self.vocab is None:
-            print("Training failed, vocab is NoneType object")
+            print("Something is wrong, vocab is NoneType object")
             return
-        
-        # acknowledge training completion
-        print("training completed. Vocab size:", len(self.vocab))
-
-    # Encoding and decoding functions for bpe goes here 
-    def encode(self, text:str) -> list[int] : 
-        """ Input: single string "hello i am anvesh"
-            Output: List of integers [23, 44, 90, 54]
-        """
-        encoded  = self._tokenizer.encode(text)
-        return encoded.ids
-    
-    def decode(self, ids: list[int], skip_special_tokens: bool = True) -> str:
-        return self._tokenizer.decode(ids, skip_special_tokens=skip_special_tokens)
-    
-    # Loading and saving a trained tokenizer goes here 
-    def save(self, directory : str | Path, prefix : str) -> None:
-        """ Saves the BPE tokeniser using Rust Tokenizer's save method"""
-        dir_path : Path = Path(directory) 
-        dir_path.mkdir(parents=True , exist_ok=True)
-        
-        # save full model merges + vocab 
-        model_path: Path = dir_path / f"{prefix}_tokenizer.json"
-        print(f"Saving model to path: {model_path}")
-        return None 
-    
-    def load(self, directory: str | Path, prefix:str) -> None:
-        """Loads the BPE tokeniser using Rust Tokenizer's load method"""
-        dir_path: Path = Path(directory) 
-        model_path: Path = dir_path / f"{prefix}_tokenizer.json"
-        if not model_path.exists(): 
-            raise FileNotFoundError(f"Tokeniser file {model_path} DOESN'T EXIST ")
-        print(f"Loading model from path: {model_path}")
-
-        # load rust backend 
-        self._tokenizer : RustTokenizer = RustTokenizer.from_file(str(model_path))
-        
-        # updating base class state so vocab_size works 
-        self.vocab = self._tokenizer.get_vocab()
-
-        print("Loaded vocab size:", len(self.vocab) if self.vocab else 0)
+        self.save()
         return None
-    
 
-    
+    # encode decode logical functions (depends on the tokeniser)
+    def encode(
+            self, 
+            data: list[str] | Iterable[list[str]]
+            ) -> list[list[int]] | Iterable[list[list[int]]]:
+        # i was too lazy to code iterable logic. I will write it when i need it. FOr now, loading entire data into memory is not a problem. (i've got 32 gb of ram :P)
+
+        
+        assert self.vocab is not None, "Vocab is not trained yet. Please train the tokeniser before encoding."
+        assert isinstance(data, list) or isinstance(data, Iterable), "Input data must be a list of strings or an iterable of list of strings"
+
+        if isinstance(data, list) and isinstance(data[0], str): 
+            # this is a list of strings, we can encode it directly
+            encoded : list[list[int]] = [self._tokenizer.encode(text).ids for text in data]
+            return encoded
+        raise ValueError("Input data must be a list of strings or an iterable of list of strings")
+
+    def decode(
+            self, 
+            tokens: list[list[int]] | Iterable[list[list[int]]] 
+            ) -> list[str] | Iterable[list[str]]:
+        
+        self._tokenizer.decoder = decoders.BPEDecoder(
+            suffix = self.config.end_of_word_suffix
+        )
+
+        if isinstance(tokens, list) and isinstance(tokens[0], list) and isinstance(tokens[0][0], int):
+            decoded_str : list[str] = [self._tokenizer.decode(tokens_list) for tokens_list in tokens]
+            return decoded_str
+        
+        else : raise ValueError("please send list[list[int]] datatype")
+        
+
+    # IO Functions of the class 
+    def load(self) -> None :
+        filepath:Path = self.tokeniser_save_path / self.config.save_name 
+        self._tokenizer = Tokenizer.from_file(str(filepath))
+        print(f"Read file path: {filepath}")
+        self.vocab = self._tokenizer.get_vocab()
+        print(f"Loaded tokeniser from {filepath}")
+        return None
+              
+    def save(self) -> None : 
+        print(f"Saving the tokeniser in {self.tokeniser_save_path}")
+        filename:str = self.config.save_name 
+        self._tokenizer.save(str(self.tokeniser_save_path / filename), pretty=True)
+
+
+def test_bpe_tokeniser() -> None:
+    # creating some dummy data for testing 
+    text_data = [
+        "Hello world",
+        "This is a test",
+        "Tokeniser is working"
+    ]
+
+    config = BPEConfig(
+        vocab_size=10,
+        unk_token="[UNK]",
+        end_of_word_suffix="</w>",
+        special_tokens=["[UNK]", "[PAD]", "[SOS]", "[EOS]"],
+        text_data=text_data,
+
+        save_name="bpe.json", 
+        save_path= Path("./tokeniser")
+    )
+
+    tokeniser: BPETokeniser = BPETokeniser(config=config)
+    print(tokeniser.vocab)
+    print("-"*60)
+    encodings:list[list[int]] | Iterable[list[list[int]]] = tokeniser.encode(data = config.text_data)
+    print(encodings)
+
+    print("-"*60)
+    decodings: list[str] | Iterable[list[str]] = tokeniser.decode(tokens=encodings)
+    print(decodings)
+
+#########################################################
+# Tokenisation pipelining code
+#########################################################
+import pandas as pd
+from src.dataloader import IITBDataConfig, IITBDataLoader
+
+
+# Stage 1: Loading Data and making a combined object 
+
+# creating Data loaders & config files 
+dataconf: IITBDataConfig = IITBDataConfig(
+    base_dir= Path("datasets/iitb"), 
+    format="parquet", 
+    directories=["raw", "processed", "tokenised"] , 
+    dataset_name= "cfilt/iitb-english-hindi"
+)
+
+dataloader: IITBDataLoader = IITBDataLoader(config=dataconf)
+
+print("Testing DataLoader") 
+
+# data is loaded and converted to a combined python list 
+data = dataloader.load_raw_data(splits=["train"])['train']
+eng_sentences:list[str] = data['en'].to_list()
+hi_sentences : list[str] = data['hi'].to_list()
+entire_corpus : list[str]= eng_sentences + hi_sentences
+
+print("*"*80)
+
+print("stage 1 succesfully completed. Data has been merged into a single python list iterable object")
+
+
+# stage 2 : training a tokeniser on this entire corpurse and testing the tokeniser out 
+
+tokenconf : BPEConfig = BPEConfig(
+    vocab_size=6000 , 
+    unk_token= "[UNK]" , 
+    end_of_word_suffix= "</w>", 
+    special_tokens=["[UNK]", "[PAD]", "[SOS]","[EOS]"],  
+    save_name= "bpe_tokeniser.json", 
+    save_path= dataconf.base_dir / Path("tokeniser"), 
+
+    # text data came from dataloader pipeline
+    text_data= entire_corpus
+)
+
+tokeniser : BPETokeniser = BPETokeniser(config=tokenconf)
+print("Tokeniser is trained and loaded into memory. Ready for encoding and decoding...")
+test_sent:str = "My name is Anvesh Dange"
+encoded = tokeniser.encode([test_sent])
+decoded = tokeniser.decode(encoded)
+print(f"{test_sent} ----> {encoded}") 
+print(f"{encoded} ----> {decoded}")
+print("*"*80)
+print("stage 2 succesfully completed")
+
+tokenised_file_path: Path = dataconf.base_dir / Path("tokenised/train_tokens.parquet") 
+if not Path(dataconf.base_dir, "tokenised", "train_tokens.parquet").exists():
+    print("Creating new dataframes for tokenized version of our data")
+    tokenised_df : pd.DataFrame = data
+    print("Tokenising ALL english sentences (will take time)")
+    # tokenised_english_sentences: list[list[int]] | Iterable[list[list[int]]] = tokeniser.encode(data = eng_sentences)
+    tokenised_df['en'] = tokeniser.encode(tokenised_df['en'].to_list())
+
+    print("Tokenising ALL hindi sentences (will take time)")
+    # tokenised_hindi_sentences: list[list[int]] | Iterable[list[list[int]]] = tokeniser.encode(data=hi_sentences)
+    tokenised_df['hi'] = tokeniser.encode(tokenised_df['hi'].to_list())
+
+    print("succesfully tokenised English and Hindi sentences")
+     
+    tokenised_df.to_parquet(path= str(tokenised_file_path), index=False, engine="pyarrow")
+
+print("*"*80)
+print("stage 3 succesfully completed")
+tokenised_df = pd.read_parquet(path=tokenised_file_path, engine="pyarrow")
+for i in range(10): 
+    eng = tokenised_df.iloc[i]['en'].tolist()
+    hi = tokenised_df.iloc[i]['hi'].tolist()
+    print(f"{tokeniser.decode([eng])} ----> {tokeniser.decode([hi])}")
+
+
+
+print(f"Successfully saved Tokenised file to : {tokenised_file_path} ")

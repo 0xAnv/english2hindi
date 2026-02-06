@@ -12,6 +12,7 @@ wheels/
 
 # data folders 
 data/
+datasets/
 
 # tokeniser directory
 tokeniser/
