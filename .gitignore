@@ -16,3 +16,6 @@ datasets/
 
 # tokeniser directory
 tokeniser/
+
+# notebooks
+.ipynb_checkpoints/

@@ -215,11 +215,11 @@ print("stage 1 succesfully completed. Data has been merged into a single python 
 # stage 2 : training a tokeniser on this entire corpurse and testing the tokeniser out 
 
 tokenconf : BPEConfig = BPEConfig(
-    vocab_size=6000 , 
+    vocab_size=32000 , 
     unk_token= "[UNK]" , 
     end_of_word_suffix= "</w>", 
     special_tokens=["[UNK]", "[PAD]", "[SOS]","[EOS]"],  
-    save_name= "bpe_tokeniser.json", 
+    save_name= "bpe_tokeniser_32k.json", 
     save_path= dataconf.base_dir / Path("tokeniser"), 
 
     # text data came from dataloader pipeline
